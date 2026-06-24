@@ -2,8 +2,8 @@
 
 > **The Cognitive Immune System (and glorified babysitter) for Autonomous CLI Agents.**
 
-[![PyPI version](https://badge.fury.io/py/panopticon-ai.svg)](https://pypi.org/project/panopticon-ai/)
-[![PyPI Downloads](https://static.pepy.tech/badge/panopticon-ai)](https://pypi.org/project/panopticon-ai/)
+[![PyPI version](https://badge.fury.io/py/panopticon-cli.svg)](https://pypi.org/project/panopticon-cli/)
+[![PyPI Downloads](https://static.pepy.tech/badge/panopticon-cli)](https://pypi.org/project/panopticon-cli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/ak/panopticon/actions/workflows/ci.yml/badge.svg)](https://github.com/ak/panopticon/actions)
@@ -28,7 +28,7 @@ It intercepts the rogue process, uses a Meta-Agent to figure out why your AI is 
 
 ```bash
 # Install globally from PyPI
-pip install panopticon-ai
+pip install panopticon-cli
 
 # Export your preferred API Key (Panopticon dynamically routes to whatever you actually pay for)
 export OPENAI_API_KEY="sk-..."
