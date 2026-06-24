@@ -28,7 +28,7 @@ def test_observer_policy_intervention():
 
     # Normal step
     observer.log_action("agent", "normal step", "action", 0)
-    
+
     # Trigger step should raise InterventionException
     with pytest.raises(InterventionException) as exc_info:
         observer.log_action("agent", "trigger", "action", 0)
