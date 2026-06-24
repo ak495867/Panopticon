@@ -7,5 +7,5 @@ __all__ = [
     "AdversarialLogicCheck",
     "AntiLoopPolicy",
     "BlacklistPolicy",
-    "PersistentMemory"
+    "PersistentMemory",
 ]

@@ -3,17 +3,23 @@ import os
 from typing import List, Dict, Callable
 from .policies import BasePolicy
 
+
 class InterventionException(Exception):
     def __init__(self, message: str, course_correction: str):
         super().__init__(message)
         self.course_correction = course_correction
 
+
 class PanopticonObserver:
-    def __init__(self, policies: List[BasePolicy] = None, telemetry_file: str = "panopticon_telemetry.jsonl"):
+    def __init__(
+        self,
+        policies: List[BasePolicy] = None,
+        telemetry_file: str = "panopticon_telemetry.jsonl",
+    ):
         self.policies = policies or []
         self.telemetry_stream = []
         self.telemetry_file = telemetry_file
-        
+
         if os.path.exists(self.telemetry_file):
             os.remove(self.telemetry_file)
 
@@ -28,7 +34,7 @@ class PanopticonObserver:
             "agent": agent_name,
             "thought": thought,
             "action": action,
-            "tokens": tokens_used
+            "tokens": tokens_used,
         }
         # Flaw 2 Fix: Bounded memory to prevent leaks
         self.telemetry_stream.append(entry)
@@ -41,11 +47,10 @@ class PanopticonObserver:
         for policy in self.policies:
             is_violating, reason, correction = policy.evaluate(self.telemetry_stream)
             if is_violating:
-                self._broadcast("guillotine", {
-                    "agent": agent_name,
-                    "reason": reason,
-                    "correction": correction
-                })
+                self._broadcast(
+                    "guillotine",
+                    {"agent": agent_name, "reason": reason, "correction": correction},
+                )
                 self._trigger_guillotine(agent_name, reason, correction)
 
     def _trigger_guillotine(self, agent_name: str, reason: str, correction: str):
@@ -58,7 +63,12 @@ class PanopticonObserver:
                 try:
                     return func(*args, **kwargs)
                 except InterventionException as e:
-                    self._broadcast("interrupt", {"agent": agent_name, "correction": e.course_correction})
+                    self._broadcast(
+                        "interrupt",
+                        {"agent": agent_name, "correction": e.course_correction},
+                    )
                     return {"status": "interrupted", "correction": e.course_correction}
+
             return wrapper
+
         return decorator

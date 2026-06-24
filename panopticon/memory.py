@@ -3,8 +3,10 @@ import os
 import re
 from typing import List, Dict
 
+
 class PersistentMemory:
     """Production-grade procedural memory using keyword similarity routing."""
+
     def __init__(self, db_path="panopticon_memory.db"):
         self.db_path = db_path
         self._init_db()
@@ -25,12 +27,12 @@ class PersistentMemory:
     def record_failure(self, reason: str, correction: str):
         with sqlite3.connect(self.db_path, timeout=10.0) as conn:
             conn.execute(
-                "INSERT INTO failures (reason, correction) VALUES (?, ?)", 
-                (reason, correction)
+                "INSERT INTO failures (reason, correction) VALUES (?, ?)",
+                (reason, correction),
             )
 
     def _extract_keywords(self, text: str) -> set:
-        words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
+        words = re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())
         return set(words)
 
     def get_relevant_failures(self, current_context: str, limit=3) -> List[Dict]:
@@ -49,7 +51,9 @@ class PersistentMemory:
             # Calculate Jaccard-like overlap score
             overlap = len(current_keywords.intersection(reason_keywords))
             if overlap > 0:
-                scored_failures.append((overlap, {"reason": reason, "correction": correction}))
+                scored_failures.append(
+                    (overlap, {"reason": reason, "correction": correction})
+                )
 
         # Sort by highest overlap, then take top N
         scored_failures.sort(key=lambda x: x[0], reverse=True)
