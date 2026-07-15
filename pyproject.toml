@@ -43,5 +43,5 @@ dev = [
 panopticon = "panopticon.cli:main"
 
 [tool.black]
-target-versions = ["py39", "py310", "py311", "py312"]
-line-length = 88
+target_version = ["py39", "py310", "py311", "py312"]
+line_length = 88
