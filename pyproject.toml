@@ -39,8 +39,9 @@ dev = [
     "flake8>=6.0.0",
 ]
 
-[tool.black]
-target-version = ["py312"]
-
 [project.scripts]
 panopticon = "panopticon.cli:main"
+
+[tool.black]
+target-versions = ["py39", "py310", "py311", "py312"]
+line-length = 88
