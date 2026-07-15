@@ -33,6 +33,8 @@ class CLIWrapper:
 
         self.process = None
         self.master_fd = None
+        self.master_fd_in = None
+        self.conpty_hPC = None
         self.buffer = []
         self.running = False
         self.lock = threading.Lock()
@@ -58,13 +60,22 @@ class CLIWrapper:
             and sys.stdin.isatty()
             and sys.stdout.isatty()
         )
+        use_conpty = (
+            sys.platform == "win32"
+            and sys.stdin is not None
+            and sys.stdin.isatty()
+            and sys.stdout.isatty()
+        )
         self.master_fd = None
+        self.master_fd_in = None
+        self.conpty_hPC = None
 
         if use_pty:
             import pty
 
             master_fd, slave_fd = pty.openpty()
             self.master_fd = master_fd
+            self.master_fd_in = master_fd
             self.process = subprocess.Popen(
                 self.command,
                 stdout=slave_fd,
@@ -76,11 +87,24 @@ class CLIWrapper:
             )
             os.close(slave_fd)
             use_stdin_thread = True
+        elif use_conpty:
+            from panopticon.conpty import spawn_conpty
+
+            proc, hPC, master_in, master_out = spawn_conpty(self.command, env=env)
+            self.process = proc
+            self.conpty_hPC = hPC
+            self.master_fd = master_out
+            self.master_fd_in = master_in
+            use_stdin_thread = True
         else:
             stdin_target = subprocess.PIPE
             use_stdin_thread = True
 
-            if sys.platform != "win32" and sys.stdin is not None and sys.stdin.isatty():
+            if (
+                sys.platform != "win32"
+                and sys.stdin is not None
+                and sys.stdin.isatty()
+            ):
                 stdin_target = sys.stdin
                 use_stdin_thread = False
 
@@ -121,6 +145,22 @@ class CLIWrapper:
         """Cleanly shutdown all threads and resources."""
         self.running = False
         self._stop_event.set()
+
+        if getattr(self, "conpty_hPC", None) is not None:
+            try:
+                from panopticon.conpty import close_conpty
+                close_conpty(self.conpty_hPC)
+            except Exception:
+                pass
+            self.conpty_hPC = None
+
+        if getattr(self, "master_fd_in", None) is not None:
+            try:
+                if self.master_fd_in != getattr(self, "master_fd", None):
+                    os.close(self.master_fd_in)
+            except Exception:
+                pass
+            self.master_fd_in = None
 
         if getattr(self, "master_fd", None) is not None:
             try:
@@ -249,7 +289,9 @@ class CLIWrapper:
                     data = read_func(1024)
                     if not data:
                         break
-                    if getattr(self, "master_fd", None) is not None:
+                    if getattr(self, "master_fd_in", None) is not None:
+                        os.write(self.master_fd_in, data)
+                    elif getattr(self, "master_fd", None) is not None:
                         os.write(self.master_fd, data)
                     elif self.process.stdin and not self.process.stdin.closed:
                         self.process.stdin.write(data)
@@ -298,7 +340,11 @@ class CLIWrapper:
                         continue
 
                     data = char.encode("utf-8")
-                    if self.process.stdin and not self.process.stdin.closed:
+                    if getattr(self, "master_fd_in", None) is not None:
+                        os.write(self.master_fd_in, data)
+                    elif getattr(self, "master_fd", None) is not None:
+                        os.write(self.master_fd, data)
+                    elif self.process.stdin and not self.process.stdin.closed:
                         self.process.stdin.write(data)
                         self.process.stdin.flush()
                 except (OSError, ValueError, BrokenPipeError):
@@ -358,7 +404,9 @@ class CLIWrapper:
                 try:
                     # Write the injection payload as binary
                     payload = (e.course_correction + "\n").encode("utf-8")
-                    if getattr(self, "master_fd", None) is not None:
+                    if getattr(self, "master_fd_in", None) is not None:
+                        os.write(self.master_fd_in, payload)
+                    elif getattr(self, "master_fd", None) is not None:
                         os.write(self.master_fd, payload)
                     elif self.process.stdin and not self.process.stdin.closed:
                         self.process.stdin.write(payload)
