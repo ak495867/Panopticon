@@ -74,6 +74,7 @@ class CLIWrapper:
 
     def _forward_stdin(self):
         import select
+
         try:
             while self.running and self.process.poll() is None:
                 # Non-blocking check: only read if data is available
@@ -85,7 +86,7 @@ class CLIWrapper:
                     ready, _, _ = select.select([sys.stdin], [], [], 0.5)
                     if not ready:
                         continue
-                
+
                 try:
                     line = sys.stdin.buffer.readline()
                     if not line:  # EOF reached
