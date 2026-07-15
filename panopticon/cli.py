@@ -7,6 +7,7 @@ import re
 import os
 import signal
 import codecs
+import atexit
 from typing import List
 from .observer import PanopticonObserver, InterventionException
 from .policies import AdversarialLogicCheck, AntiLoopPolicy, BlacklistPolicy
@@ -34,6 +35,7 @@ class CLIWrapper:
         self.buffer = []
         self.running = False
         self.lock = threading.Lock()
+        self.threads = []
 
     def run(self):
         self.running = True
@@ -57,69 +59,137 @@ class CLIWrapper:
             env=env,
         )
 
-        t_out = threading.Thread(target=self._read_stdout)
-        t_out.daemon = True
+        t_out = threading.Thread(target=self._read_stdout, daemon=True)
         t_out.start()
+        self.threads.append(t_out)
 
-        t_in = threading.Thread(target=self._forward_stdin)
-        t_in.daemon = True
+        t_in = threading.Thread(target=self._forward_stdin, daemon=True)
         t_in.start()
+        self.threads.append(t_in)
 
-        t_eval = threading.Thread(target=self._eval_loop)
-        t_eval.daemon = True
+        t_eval = threading.Thread(target=self._eval_loop, daemon=True)
         t_eval.start()
+        self.threads.append(t_eval)
 
-        self.process.wait()
-        self.running = False
-
-    def _forward_stdin(self):
-        import select
+        # Register cleanup on exit
+        atexit.register(self._cleanup)
 
         try:
-            while self.running and self.process.poll() is None:
-                # Non-blocking check: only read if data is available
-                if sys.platform == "win32":
-                    # Windows doesn't support select on stdin, so use a small sleep
-                    time.sleep(0.1)
-                else:
-                    # Unix/Linux: use select to check if stdin is readable
-                    ready, _, _ = select.select([sys.stdin], [], [], 0.5)
-                    if not ready:
-                        continue
+            self.process.wait()
+        finally:
+            self.running = False
+            self._cleanup()
 
+    def _cleanup(self):
+        """Cleanly shutdown all threads and resources."""
+        self.running = False
+
+        # Close subprocess pipes
+        if self.process:
+            try:
+                if self.process.stdin and not self.process.stdin.closed:
+                    self.process.stdin.close()
+            except Exception:
+                pass
+
+            try:
+                if self.process.stdout and not self.process.stdout.closed:
+                    self.process.stdout.close()
+            except Exception:
+                pass
+
+            try:
+                if self.process.poll() is None:
+                    self.process.terminate()
+                    try:
+                        self.process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()
+            except Exception:
+                pass
+
+        # Wait for threads with timeout
+        for thread in self.threads:
+            if thread.is_alive():
+                thread.join(timeout=1)
+
+    def _forward_stdin(self):
+        """Forward stdin to subprocess, with non-blocking checks."""
+        try:
+            while self.running and self.process and self.process.poll() is None:
                 try:
-                    line = sys.stdin.buffer.readline()
-                    if not line:  # EOF reached
-                        break
-                    self.process.stdin.write(line)
-                    self.process.stdin.flush()
-                except (EOFError, OSError):
+                    # Windows-safe non-blocking stdin read
+                    if sys.platform == "win32":
+                        # On Windows, use a small sleep to avoid 100% CPU
+                        time.sleep(0.05)
+                        # Try non-blocking read using a different approach
+                        if sys.stdin and not sys.stdin.closed:
+                            try:
+                                # This will still block, but with timeout via select on Unix
+                                line = sys.stdin.buffer.readline()
+                                if line:
+                                    if self.process.stdin and not self.process.stdin.closed:
+                                        self.process.stdin.write(line)
+                                        self.process.stdin.flush()
+                                else:
+                                    break  # EOF
+                            except (EOFError, OSError, ValueError):
+                                break
+                    else:
+                        # Unix/Linux: use select for non-blocking check
+                        import select
+
+                        ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+                        if ready:
+                            line = sys.stdin.buffer.readline()
+                            if line:
+                                if self.process.stdin and not self.process.stdin.closed:
+                                    self.process.stdin.write(line)
+                                    self.process.stdin.flush()
+                            else:
+                                break  # EOF
+                except (EOFError, OSError, ValueError, BrokenPipeError):
                     break
         except Exception:
             pass
+        finally:
+            try:
+                if self.process and self.process.stdin and not self.process.stdin.closed:
+                    self.process.stdin.close()
+            except Exception:
+                pass
 
     def _read_stdout(self):
         # Flaw 2 Fix: Safely decode multi-byte UTF-8 emojis incrementally
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         try:
-            while self.running and self.process.poll() is None:
-                byte_chunk = self.process.stdout.read(1)
-                if not byte_chunk:
+            while self.running and self.process and self.process.poll() is None:
+                try:
+                    byte_chunk = self.process.stdout.read(1)
+                    if not byte_chunk:
+                        break
+
+                    # Mirror raw bytes to actual terminal seamlessly
+                    sys.stdout.buffer.write(byte_chunk)
+                    sys.stdout.buffer.flush()
+
+                    char_str = decoder.decode(byte_chunk)
+                    if char_str:
+                        with self.lock:
+                            self.buffer.append(char_str)
+                except (OSError, ValueError, BrokenPipeError):
                     break
-
-                # Mirror raw bytes to actual terminal seamlessly
-                sys.stdout.buffer.write(byte_chunk)
-                sys.stdout.buffer.flush()
-
-                char_str = decoder.decode(byte_chunk)
-                if char_str:
-                    with self.lock:
-                        self.buffer.append(char_str)
         except Exception:
             pass
+        finally:
+            try:
+                if self.process and self.process.stdout and not self.process.stdout.closed:
+                    self.process.stdout.close()
+            except Exception:
+                pass
 
     def _eval_loop(self):
-        while self.running and self.process.poll() is None:
+        while self.running and self.process and self.process.poll() is None:
             time.sleep(15)
 
             with self.lock:
@@ -158,9 +228,10 @@ class CLIWrapper:
 
                 try:
                     # Write the injection payload as binary
-                    payload = (e.course_correction + "\n").encode("utf-8")
-                    self.process.stdin.write(payload)
-                    self.process.stdin.flush()
+                    if self.process.stdin and not self.process.stdin.closed:
+                        payload = (e.course_correction + "\n").encode("utf-8")
+                        self.process.stdin.write(payload)
+                        self.process.stdin.flush()
                 except Exception as ex:
                     print(
                         f"[ERROR] Live injection failed or agent deadlocked: {ex}. Hard terminating."
@@ -191,7 +262,16 @@ def main():
         sys.exit(1)
 
     wrapper = CLIWrapper(args.command)
-    wrapper.run()
+    try:
+        wrapper.run()
+    except KeyboardInterrupt:
+        print("\n[PANOPTICON] Interrupted by user. Cleaning up...")
+        wrapper._cleanup()
+        sys.exit(0)
+    except Exception as e:
+        print(f"[PANOPTICON ERROR] {e}")
+        wrapper._cleanup()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
