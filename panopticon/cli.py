@@ -80,11 +80,7 @@ class CLIWrapper:
             stdin_target = subprocess.PIPE
             use_stdin_thread = True
 
-            if (
-                sys.platform != "win32"
-                and sys.stdin is not None
-                and sys.stdin.isatty()
-            ):
+            if sys.platform != "win32" and sys.stdin is not None and sys.stdin.isatty():
                 stdin_target = sys.stdin
                 use_stdin_thread = False
 
@@ -208,12 +204,14 @@ class CLIWrapper:
             ):
                 try:
                     import msvcrt
+
                     return msvcrt.kbhit()
                 except ImportError:
                     return False
             return True
         else:
             import select
+
             try:
                 rlist, _, _ = select.select([sys.stdin], [], [], 0)
                 return bool(rlist)
