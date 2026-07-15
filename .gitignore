@@ -42,3 +42,5 @@ panopticon_memory.db
 panopticon_telemetry.jsonl
 panopticon_memory.db-wal
 panopticon_memory.db-shm
+
+.pypirc
