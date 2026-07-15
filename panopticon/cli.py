@@ -73,13 +73,27 @@ class CLIWrapper:
         self.running = False
 
     def _forward_stdin(self):
+        import select
         try:
             while self.running and self.process.poll() is None:
-                # Read binary from stdin to pass natively to process
-                line = sys.stdin.buffer.readline()
-                if line:
+                # Non-blocking check: only read if data is available
+                if sys.platform == "win32":
+                    # Windows doesn't support select on stdin, so use a small sleep
+                    time.sleep(0.1)
+                else:
+                    # Unix/Linux: use select to check if stdin is readable
+                    ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+                    if not ready:
+                        continue
+                
+                try:
+                    line = sys.stdin.buffer.readline()
+                    if not line:  # EOF reached
+                        break
                     self.process.stdin.write(line)
                     self.process.stdin.flush()
+                except (EOFError, OSError):
+                    break
         except Exception:
             pass
 
