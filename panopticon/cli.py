@@ -36,7 +36,7 @@ class CLIWrapper:
         self.running = False
         self.lock = threading.Lock()
         self.threads = []
-        self.stdin_reader = None
+        self._stop_event = threading.Event()
 
     def run(self):
         self.running = True
@@ -61,15 +61,15 @@ class CLIWrapper:
             env=env,
         )
 
-        t_out = threading.Thread(target=self._read_stdout, daemon=True)
+        t_out = threading.Thread(target=self._read_stdout)
         t_out.start()
         self.threads.append(t_out)
 
-        t_eval = threading.Thread(target=self._eval_loop, daemon=True)
+        t_eval = threading.Thread(target=self._eval_loop)
         t_eval.start()
         self.threads.append(t_eval)
 
-        t_in = threading.Thread(target=self._read_stdin, daemon=True)
+        t_in = threading.Thread(target=self._read_stdin)
         t_in.start()
         self.threads.append(t_in)
 
@@ -87,6 +87,7 @@ class CLIWrapper:
     def _cleanup(self):
         """Cleanly shutdown all threads and resources."""
         self.running = False
+        self._stop_event.set()
 
         # Close subprocess pipes FIRST before thread cleanup
         if self.process:
@@ -116,6 +117,24 @@ class CLIWrapper:
         for thread in self.threads:
             if thread.is_alive():
                 thread.join(timeout=1)
+
+    def _stdin_ready(self) -> bool:
+        stdin_obj = sys.stdin
+        if sys.platform == "win32":
+            try:
+                import msvcrt
+            except ImportError:
+                pass
+            else:
+                if stdin_obj.isatty():
+                    return msvcrt.kbhit()
+
+        try:
+            import select
+
+            return bool(select.select([stdin_obj], [], [], 0.1)[0])
+        except Exception:
+            return False
 
     def _read_stdout(self):
         # Flaw 2 Fix: Safely decode multi-byte UTF-8 emojis incrementally
@@ -151,10 +170,23 @@ class CLIWrapper:
                 pass
 
     def _read_stdin(self):
+        stdin_buffer = getattr(sys.stdin, "buffer", None)
+        if stdin_buffer is None:
+            return
+
         try:
-            while self.running and self.process and self.process.poll() is None:
+            while (
+                self.running
+                and self.process
+                and self.process.poll() is None
+                and not self._stop_event.is_set()
+            ):
+                if not self._stdin_ready():
+                    time.sleep(0.1)
+                    continue
+
                 try:
-                    data = sys.stdin.buffer.read1(1024)
+                    data = stdin_buffer.read1(1024)
                     if not data:
                         break
                     if self.process.stdin and not self.process.stdin.closed:
