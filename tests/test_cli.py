@@ -1,5 +1,6 @@
 import io
 import sys
+from unittest.mock import patch
 
 from panopticon.cli import CLIWrapper, strip_ansi
 
@@ -52,12 +53,12 @@ def test_read_stdin_forwards_input():
     wrapper.running = True
     wrapper.process = DummyProcess()
 
-    original_stdin = sys.stdin
-    try:
-        sys.stdin = DummyStdinStream(b"hello world\n")
-        wrapper._read_stdin()
-    finally:
-        sys.stdin = original_stdin
+    dummy_stdin = DummyStdinStream(b"hello world\n")
+    dummy_stdin.isatty = lambda: True
+
+    with patch("panopticon.cli.sys.stdin", dummy_stdin):
+        with patch.object(CLIWrapper, "_stdin_ready", return_value=True):
+            wrapper._read_stdin()
 
     assert wrapper.process.stdin.written == b"hello world\n"
     assert wrapper.process.stdin.closed is True

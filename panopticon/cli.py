@@ -32,6 +32,7 @@ class CLIWrapper:
         )
 
         self.process = None
+        self.master_fd = None
         self.buffer = []
         self.running = False
         self.lock = threading.Lock()
@@ -51,27 +52,63 @@ class CLIWrapper:
             f"AdversarialLogic"
         )
 
-        # Flaw 2 Fix: Removing text=True to read raw binary bytes
-        self.process = subprocess.Popen(
-            self.command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE,
-            bufsize=0,
-            env=env,
+        use_pty = (
+            sys.platform != "win32"
+            and sys.stdin is not None
+            and sys.stdin.isatty()
+            and sys.stdout.isatty()
         )
+        self.master_fd = None
 
-        t_out = threading.Thread(target=self._read_stdout)
+        if use_pty:
+            import pty
+
+            master_fd, slave_fd = pty.openpty()
+            self.master_fd = master_fd
+            self.process = subprocess.Popen(
+                self.command,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                stdin=slave_fd,
+                bufsize=0,
+                env=env,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            use_stdin_thread = True
+        else:
+            stdin_target = subprocess.PIPE
+            use_stdin_thread = True
+
+            if (
+                sys.platform != "win32"
+                and sys.stdin is not None
+                and sys.stdin.isatty()
+            ):
+                stdin_target = sys.stdin
+                use_stdin_thread = False
+
+            self.process = subprocess.Popen(
+                self.command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=stdin_target,
+                bufsize=0,
+                env=env,
+            )
+
+        t_out = threading.Thread(target=self._read_stdout, daemon=True)
         t_out.start()
         self.threads.append(t_out)
 
-        t_eval = threading.Thread(target=self._eval_loop)
+        t_eval = threading.Thread(target=self._eval_loop, daemon=True)
         t_eval.start()
         self.threads.append(t_eval)
 
-        t_in = threading.Thread(target=self._read_stdin)
-        t_in.start()
-        self.threads.append(t_in)
+        if use_stdin_thread:
+            t_in = threading.Thread(target=self._read_stdin, daemon=True)
+            t_in.start()
+            self.threads.append(t_in)
 
         # Register cleanup on exit
         atexit.register(self._cleanup)
@@ -88,6 +125,13 @@ class CLIWrapper:
         """Cleanly shutdown all threads and resources."""
         self.running = False
         self._stop_event.set()
+
+        if getattr(self, "master_fd", None) is not None:
+            try:
+                os.close(self.master_fd)
+            except Exception:
+                pass
+            self.master_fd = None
 
         # Close subprocess pipes FIRST before thread cleanup
         if self.process:
@@ -118,31 +162,16 @@ class CLIWrapper:
             if thread.is_alive():
                 thread.join(timeout=1)
 
-    def _stdin_ready(self) -> bool:
-        stdin_obj = sys.stdin
-        if sys.platform == "win32":
-            try:
-                import msvcrt
-            except ImportError:
-                pass
-            else:
-                if stdin_obj.isatty():
-                    return msvcrt.kbhit()
-
-        try:
-            import select
-
-            return bool(select.select([stdin_obj], [], [], 0.1)[0])
-        except Exception:
-            return False
-
     def _read_stdout(self):
         # Flaw 2 Fix: Safely decode multi-byte UTF-8 emojis incrementally
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         try:
             while self.running and self.process and self.process.poll() is None:
                 try:
-                    byte_chunk = self.process.stdout.read(1)
+                    if getattr(self, "master_fd", None) is not None:
+                        byte_chunk = os.read(self.master_fd, 1)
+                    else:
+                        byte_chunk = self.process.stdout.read(1)
                     if not byte_chunk:
                         break
 
@@ -161,7 +190,8 @@ class CLIWrapper:
         finally:
             try:
                 if (
-                    self.process
+                    getattr(self, "master_fd", None) is None
+                    and self.process
                     and self.process.stdout
                     and (not self.process.stdout.closed)
                 ):
@@ -169,7 +199,38 @@ class CLIWrapper:
             except Exception:
                 pass
 
+    def _stdin_ready(self) -> bool:
+        if sys.platform == "win32":
+            if (
+                sys.stdin is not None
+                and getattr(sys.stdin, "isatty", lambda: False)()
+                and hasattr(sys.stdin, "fileno")
+            ):
+                try:
+                    import msvcrt
+                    return msvcrt.kbhit()
+                except ImportError:
+                    return False
+            return True
+        else:
+            import select
+            try:
+                rlist, _, _ = select.select([sys.stdin], [], [], 0)
+                return bool(rlist)
+            except Exception:
+                return False
+
     def _read_stdin(self):
+        if sys.platform == "win32":
+            if (
+                sys.stdin is not None
+                and getattr(sys.stdin, "isatty", lambda: False)()
+                and hasattr(sys.stdin, "fileno")
+                and sys.stdin.fileno() == 0
+            ):
+                self._read_stdin_windows()
+                return
+
         stdin_buffer = getattr(sys.stdin, "buffer", None)
         if stdin_buffer is None:
             return
@@ -186,9 +247,59 @@ class CLIWrapper:
                     continue
 
                 try:
-                    data = stdin_buffer.read1(1024)
+                    read_func = getattr(stdin_buffer, "read1", stdin_buffer.read)
+                    data = read_func(1024)
                     if not data:
                         break
+                    if getattr(self, "master_fd", None) is not None:
+                        os.write(self.master_fd, data)
+                    elif self.process.stdin and not self.process.stdin.closed:
+                        self.process.stdin.write(data)
+                        self.process.stdin.flush()
+                except (OSError, ValueError, BrokenPipeError):
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                if (
+                    getattr(self, "master_fd", None) is None
+                    and self.process
+                    and self.process.stdin
+                    and (not self.process.stdin.closed)
+                ):
+                    self.process.stdin.close()
+            except Exception:
+                pass
+
+    def _read_stdin_windows(self):
+        try:
+            import msvcrt
+        except ImportError:
+            return
+
+        try:
+            while (
+                self.running
+                and self.process
+                and self.process.poll() is None
+                and not self._stop_event.is_set()
+            ):
+                if not msvcrt.kbhit():
+                    time.sleep(0.1)
+                    continue
+
+                try:
+                    char = msvcrt.getwch()
+                    if char == "\x03":
+                        if self.process.poll() is None:
+                            try:
+                                self.process.send_signal(signal.CTRL_C_EVENT)
+                            except Exception:
+                                pass
+                        continue
+
+                    data = char.encode("utf-8")
                     if self.process.stdin and not self.process.stdin.closed:
                         self.process.stdin.write(data)
                         self.process.stdin.flush()
@@ -248,8 +359,10 @@ class CLIWrapper:
 
                 try:
                     # Write the injection payload as binary
-                    if self.process.stdin and not self.process.stdin.closed:
-                        payload = (e.course_correction + "\n").encode("utf-8")
+                    payload = (e.course_correction + "\n").encode("utf-8")
+                    if getattr(self, "master_fd", None) is not None:
+                        os.write(self.master_fd, payload)
+                    elif self.process.stdin and not self.process.stdin.closed:
                         self.process.stdin.write(payload)
                         self.process.stdin.flush()
                 except Exception as ex:
