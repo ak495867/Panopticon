@@ -70,7 +70,9 @@ if sys.platform == "win32":
             res = kernel32.WaitForSingleObject(self.pi.hProcess, 0)
             if res == 0:  # WAIT_OBJECT_0
                 exit_code = wintypes.DWORD()
-                if kernel32.GetExitCodeProcess(self.pi.hProcess, ctypes.byref(exit_code)):
+                if kernel32.GetExitCodeProcess(
+                    self.pi.hProcess, ctypes.byref(exit_code)
+                ):
                     self.returncode = exit_code.value
                 else:
                     self.returncode = 0
@@ -87,7 +89,9 @@ if sys.platform == "win32":
             res = kernel32.WaitForSingleObject(self.pi.hProcess, ms)
             if res == 0:
                 exit_code = wintypes.DWORD()
-                if kernel32.GetExitCodeProcess(self.pi.hProcess, ctypes.byref(exit_code)):
+                if kernel32.GetExitCodeProcess(
+                    self.pi.hProcess, ctypes.byref(exit_code)
+                ):
                     self.returncode = exit_code.value
                 else:
                     self.returncode = 0
@@ -124,7 +128,9 @@ if sys.platform == "win32":
 
         size = COORD(120, 30)
         hPC = HPCON()
-        res = kernel32.CreatePseudoConsole(size, hInputRead, hOutputWrite, 0, ctypes.byref(hPC))
+        res = kernel32.CreatePseudoConsole(
+            size, hInputRead, hOutputWrite, 0, ctypes.byref(hPC)
+        )
         if res != 0:
             os.close(in_read)
             os.close(in_write)
@@ -133,9 +139,13 @@ if sys.platform == "win32":
             raise RuntimeError(f"CreatePseudoConsole failed with HRESULT {res}")
 
         attr_list_size = ctypes.c_size_t(0)
-        kernel32.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(attr_list_size))
+        kernel32.InitializeProcThreadAttributeList(
+            None, 1, 0, ctypes.byref(attr_list_size)
+        )
         attr_list = ctypes.create_string_buffer(attr_list_size.value)
-        if not kernel32.InitializeProcThreadAttributeList(attr_list, 1, 0, ctypes.byref(attr_list_size)):
+        if not kernel32.InitializeProcThreadAttributeList(
+            attr_list, 1, 0, ctypes.byref(attr_list_size)
+        ):
             kernel32.ClosePseudoConsole(hPC)
             raise RuntimeError("InitializeProcThreadAttributeList failed")
 
@@ -203,7 +213,9 @@ if sys.platform == "win32":
                 kernel32.ClosePseudoConsole(hPC)
             except Exception:
                 pass
+
 else:
+
     def spawn_conpty(command, env=None):
         raise NotImplementedError("ConPTY is only supported on Windows")
 

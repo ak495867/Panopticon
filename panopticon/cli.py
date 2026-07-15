@@ -100,11 +100,7 @@ class CLIWrapper:
             stdin_target = subprocess.PIPE
             use_stdin_thread = True
 
-            if (
-                sys.platform != "win32"
-                and sys.stdin is not None
-                and sys.stdin.isatty()
-            ):
+            if sys.platform != "win32" and sys.stdin is not None and sys.stdin.isatty():
                 stdin_target = sys.stdin
                 use_stdin_thread = False
 
@@ -149,6 +145,7 @@ class CLIWrapper:
         if getattr(self, "conpty_hPC", None) is not None:
             try:
                 from panopticon.conpty import close_conpty
+
                 close_conpty(self.conpty_hPC)
             except Exception:
                 pass
