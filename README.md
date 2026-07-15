@@ -4,6 +4,7 @@
 
 [![PyPI version](https://badge.fury.io/py/panopticon-cli.svg)](https://pypi.org/project/panopticon-cli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/ak495867/Panopticon/actions/workflows/ci.yml/badge.svg)](https://github.com/ak495867/Panopticon/actions/workflows/ci.yml)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
 Autonomous CLI agents (like Claude Code, AutoGPT, and Antigravity) are amazing... right until they hallucinate, burn through $50 of your API credits, or confidently try to `rm -rf /` your hard drive. 
