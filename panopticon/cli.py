@@ -36,6 +36,7 @@ class CLIWrapper:
         self.running = False
         self.lock = threading.Lock()
         self.threads = []
+        self.stdin_reader = None
 
     def run(self):
         self.running = True
@@ -46,7 +47,8 @@ class CLIWrapper:
 
         print(f"[PANOPTICON] Booting Immune System for: {' '.join(self.command)}")
         print(
-            f"[PANOPTICON] Policies Active: Blacklist, AntiLoop (Fuzzy), AdversarialLogic"
+            f"[PANOPTICON] Policies Active: Blacklist, AntiLoop (Fuzzy), "
+            f"AdversarialLogic"
         )
 
         # Flaw 2 Fix: Removing text=True to read raw binary bytes
@@ -59,15 +61,11 @@ class CLIWrapper:
             env=env,
         )
 
-        t_out = threading.Thread(target=self._read_stdout, daemon=True)
+        t_out = threading.Thread(target=self._read_stdout, daemon=False)
         t_out.start()
         self.threads.append(t_out)
 
-        t_in = threading.Thread(target=self._forward_stdin, daemon=True)
-        t_in.start()
-        self.threads.append(t_in)
-
-        t_eval = threading.Thread(target=self._eval_loop, daemon=True)
+        t_eval = threading.Thread(target=self._eval_loop, daemon=False)
         t_eval.start()
         self.threads.append(t_eval)
 
@@ -76,6 +74,8 @@ class CLIWrapper:
 
         try:
             self.process.wait()
+        except KeyboardInterrupt:
+            pass
         finally:
             self.running = False
             self._cleanup()
@@ -84,7 +84,7 @@ class CLIWrapper:
         """Cleanly shutdown all threads and resources."""
         self.running = False
 
-        # Close subprocess pipes
+        # Close subprocess pipes FIRST before thread cleanup
         if self.process:
             try:
                 if self.process.stdin and not self.process.stdin.closed:
@@ -113,52 +113,6 @@ class CLIWrapper:
             if thread.is_alive():
                 thread.join(timeout=1)
 
-    def _forward_stdin(self):
-        """Forward stdin to subprocess, with non-blocking checks."""
-        try:
-            while self.running and self.process and self.process.poll() is None:
-                try:
-                    # Windows-safe non-blocking stdin read
-                    if sys.platform == "win32":
-                        # On Windows, use a small sleep to avoid 100% CPU
-                        time.sleep(0.05)
-                        # Try non-blocking read using a different approach
-                        if sys.stdin and not sys.stdin.closed:
-                            try:
-                                # This will still block, but with timeout via select on Unix
-                                line = sys.stdin.buffer.readline()
-                                if line:
-                                    if self.process.stdin and not self.process.stdin.closed:
-                                        self.process.stdin.write(line)
-                                        self.process.stdin.flush()
-                                else:
-                                    break  # EOF
-                            except (EOFError, OSError, ValueError):
-                                break
-                    else:
-                        # Unix/Linux: use select for non-blocking check
-                        import select
-
-                        ready, _, _ = select.select([sys.stdin], [], [], 0.1)
-                        if ready:
-                            line = sys.stdin.buffer.readline()
-                            if line:
-                                if self.process.stdin and not self.process.stdin.closed:
-                                    self.process.stdin.write(line)
-                                    self.process.stdin.flush()
-                            else:
-                                break  # EOF
-                except (EOFError, OSError, ValueError, BrokenPipeError):
-                    break
-        except Exception:
-            pass
-        finally:
-            try:
-                if self.process and self.process.stdin and not self.process.stdin.closed:
-                    self.process.stdin.close()
-            except Exception:
-                pass
-
     def _read_stdout(self):
         # Flaw 2 Fix: Safely decode multi-byte UTF-8 emojis incrementally
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -183,7 +137,9 @@ class CLIWrapper:
             pass
         finally:
             try:
-                if self.process and self.process.stdout and not self.process.stdout.closed:
+                if self.process and self.process.stdout and (
+                    not self.process.stdout.closed
+                ):
                     self.process.stdout.close()
             except Exception:
                 pass
@@ -213,15 +169,13 @@ class CLIWrapper:
             except InterventionException as e:
                 print(f"\n\n[PANOPTICON GUILLOTINE TRIGGERED]")
                 print(f"[REASON]: {e.args[0]}")
-                print(
-                    f"[LIVE INJECTION]: Interrupting agent and injecting correction...\n"
-                )
+                print(f"[LIVE INJECTION]: Interrupting agent and injecting " f"correction...\n")
 
                 # Flaw 1 Fix: The "Unkillable Zombie" SIGINT Interrupt
                 try:
                     if sys.platform != "win32":
                         self.process.send_signal(signal.SIGINT)
-                    # Give the agent a split second to catch the interrupt before writing to stdin
+                    # Give the agent a split second to catch the interrupt
                     time.sleep(0.5)
                 except Exception:
                     pass
@@ -234,7 +188,8 @@ class CLIWrapper:
                         self.process.stdin.flush()
                 except Exception as ex:
                     print(
-                        f"[ERROR] Live injection failed or agent deadlocked: {ex}. Hard terminating."
+                        f"[ERROR] Live injection failed or agent deadlocked: "
+                        f"{ex}. Hard terminating."
                     )
                     self.process.terminate()
                     self.running = False
