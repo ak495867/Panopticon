@@ -61,13 +61,17 @@ class CLIWrapper:
             env=env,
         )
 
-        t_out = threading.Thread(target=self._read_stdout, daemon=False)
+        t_out = threading.Thread(target=self._read_stdout, daemon=True)
         t_out.start()
         self.threads.append(t_out)
 
-        t_eval = threading.Thread(target=self._eval_loop, daemon=False)
+        t_eval = threading.Thread(target=self._eval_loop, daemon=True)
         t_eval.start()
         self.threads.append(t_eval)
+
+        t_in = threading.Thread(target=self._read_stdin, daemon=True)
+        t_in.start()
+        self.threads.append(t_in)
 
         # Register cleanup on exit
         atexit.register(self._cleanup)
@@ -137,10 +141,37 @@ class CLIWrapper:
             pass
         finally:
             try:
-                if self.process and self.process.stdout and (
-                    not self.process.stdout.closed
+                if (
+                    self.process
+                    and self.process.stdout
+                    and (not self.process.stdout.closed)
                 ):
                     self.process.stdout.close()
+            except Exception:
+                pass
+
+    def _read_stdin(self):
+        try:
+            while self.running and self.process and self.process.poll() is None:
+                try:
+                    data = sys.stdin.buffer.read1(1024)
+                    if not data:
+                        break
+                    if self.process.stdin and not self.process.stdin.closed:
+                        self.process.stdin.write(data)
+                        self.process.stdin.flush()
+                except (OSError, ValueError, BrokenPipeError):
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                if (
+                    self.process
+                    and self.process.stdin
+                    and (not self.process.stdin.closed)
+                ):
+                    self.process.stdin.close()
             except Exception:
                 pass
 
@@ -169,7 +200,10 @@ class CLIWrapper:
             except InterventionException as e:
                 print(f"\n\n[PANOPTICON GUILLOTINE TRIGGERED]")
                 print(f"[REASON]: {e.args[0]}")
-                print(f"[LIVE INJECTION]: Interrupting agent and injecting " f"correction...\n")
+                print(
+                    f"[LIVE INJECTION]: Interrupting agent and injecting "
+                    f"correction...\n"
+                )
 
                 # Flaw 1 Fix: The "Unkillable Zombie" SIGINT Interrupt
                 try:
